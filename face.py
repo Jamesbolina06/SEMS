@@ -2,7 +2,8 @@ import cv2
 import time
 import os
 import sqlite3
-import PIL.Image, PIL.ImageTk
+import numpy as np
+import PIL.Image
 import customtkinter as ctk
 from datetime import datetime
 
@@ -14,144 +15,186 @@ class SEMSApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        # Title updated per your specific project requirements
-        self.title("SMART EXAMINATION MONITORING SYSTEM USING MOTION DETECTION FOR ACADEMIC INTEGRITY ASSURANCE")
-        self.geometry("1100x700")
+        self.title("SEMS - SMART EXAMINATION MONITORING SYSTEM")
+        self.geometry("1200x800")
 
         # --- DATABASE SETUP ---
-        self.db_conn = self.init_db()
+        # NOTE: If you still get a 'column detail' error, delete D:\SEMS\sems_database.db manually.
+        self.db_path = r"D:\SEMS\sems_database.db"
+        self.db_conn = self.init_db() 
         
-        # --- DETECTOR SETUP ---
+        # Detector Setup
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-        self.profile_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_profileface.xml')
         
-        # FIX: Using CAP_DSHOW and setting resolution to fix grabFrame errors and stuttering
+        # Camera Setup
         self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
-        # --- LOGIC VARIABLES ---
-        self.initial_x = None
-        self.turn_start_time = None
-        self.alert_active = False
-        self.last_alert_time = 0
-        
-        # FIX: Balanced sensitivity at 0.15 to ensure the left side scans without stuttering
-        self.RIGHT_SENSITIVITY = 0.15
-        self.LEFT_SENSITIVITY = 0.15  
-        self.TURN_DURATION = 3
+        # Logic Variables for Clear Motion Detection
+        self.person_data = {} 
+        self.SMOOTHING_FACTOR = 0.3 # Lower = smoother, higher = faster response
+        self.DEAD_ZONE = 0.15      # Ignore head shifts < 15% of face width
+        self.RIGHT_SENSITIVITY = 0.20
+        self.LEFT_SENSITIVITY = 0.20  
+        self.TURN_DURATION = 3.0
 
-        # --- UI LAYOUT ---
-        self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(0, weight=1)
-
-        # Sidebar for stats
-        self.sidebar = ctk.CTkFrame(self, width=250, corner_radius=0)
-        self.sidebar.grid(row=0, column=0, sticky="nsew")
-        
-        self.logo_label = ctk.CTkLabel(self.sidebar, text="SEMS MONITOR", font=ctk.CTkFont(size=20, weight="bold"))
-        self.logo_label.pack(pady=20)
-
-        self.status_card = ctk.CTkFrame(self.sidebar, fg_color="#2b2b2b")
-        self.status_card.pack(pady=10, padx=20, fill="x")
-        
-        self.status_label = ctk.CTkLabel(self.status_card, text="STATUS: OK", text_color="#2ecc71", font=("Arial", 14, "bold"))
-        self.status_label.pack(pady=10)
-
-        self.log_box = ctk.CTkTextbox(self.sidebar, width=200, height=300)
-        self.log_box.pack(pady=20, padx=10)
-        self.log_box.insert("0.0", "System Logs:\n" + "-"*20 + "\n")
-
-        # Video Feed Area
-        self.video_frame = ctk.CTkFrame(self, fg_color="black")
-        self.video_frame.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
-        
-        self.video_label = ctk.CTkLabel(self.video_frame, text="") 
-        self.video_label.pack(expand=True)
-
-        self.btn_quit = ctk.CTkButton(self.sidebar, text="STOP SYSTEM", fg_color="#e74c3c", hover_color="#c0392b", command=self.on_closing)
-        self.btn_quit.pack(side="bottom", pady=20)
-
+        self.setup_main_ui()
         self.update_frame()
 
     def init_db(self):
-        conn = sqlite3.connect('sems_database.db')
+        """Creates database and ensures column names match logic."""
+        if not os.path.exists(r"D:\SEMS"): 
+            os.makedirs(r"D:\SEMS")
+        
+        conn = sqlite3.connect(self.db_path)
+        # Fixes the 'detail' column error
         conn.execute('''CREATE TABLE IF NOT EXISTS incidents 
-                        (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT, violation_type TEXT, snapshot_path TEXT)''')
+                        (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                         timestamp TEXT, 
+                         detail TEXT, 
+                         path TEXT)''')
         conn.commit()
         return conn
 
-    def log_incident(self, direction, frame):
-        os.makedirs("snapshots", exist_ok=True)
+    def setup_main_ui(self):
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+
+        # --- SIDEBAR (Clean UI) ---
+        self.sidebar = ctk.CTkFrame(self, width=300, corner_radius=0, fg_color="#121212")
+        self.sidebar.grid(row=0, column=0, sticky="nsew")
+        
+        # Logo Integration
+        try:
+            logo_path = r"D:\SEMS\images\logo.png"
+            raw_img = PIL.Image.open(logo_path)
+            logo_img = ctk.CTkImage(light_image=raw_img, dark_image=raw_img, size=(240, 120))
+            self.logo_label = ctk.CTkLabel(self.sidebar, image=logo_img, text="")
+            self.logo_label.pack(pady=(30, 10))
+        except:
+            self.logo_label = ctk.CTkLabel(self.sidebar, text="SEMS", font=("Arial", 30, "bold"))
+            self.logo_label.pack(pady=30)
+
+        # --- SYSTEM STATUS SECTION ---
+        self.status_container = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        self.status_container.pack(pady=20, padx=25, fill="x")
+
+        self.line = ctk.CTkFrame(self.status_container, width=2, fg_color="#FFFFFF")
+        self.line.pack(side="left", padx=(0, 15), fill="y")
+
+        self.status_text_inner = ctk.CTkFrame(self.status_container, fg_color="transparent")
+        self.status_text_inner.pack(side="left")
+
+        ctk.CTkLabel(self.status_text_inner, text="SYSTEM STATUS", 
+                     font=ctk.CTkFont(size=14, weight="bold"), 
+                     anchor="w", text_color="#FFFFFF").pack(fill="x")
+
+        self.status_label = ctk.CTkLabel(self.status_text_inner, text="SYNCHRONIZED", 
+                                         text_color="#2ecc71", font=("Arial", 11), anchor="w")
+        self.status_label.pack(fill="x")
+
+        self.count_label = ctk.CTkLabel(self.sidebar, text="ACTIVE USERS: 0", 
+                                        font=("Arial", 12, "bold"), text_color="#888888")
+        self.count_label.pack(pady=(5, 0))
+
+        # --- LOG BOX ---
+        self.log_box = ctk.CTkTextbox(self.sidebar, width=260, height=350, fg_color="#0a0a0a", border_width=1)
+        self.log_box.pack(pady=20, padx=15)
+        self.log_box.insert("0.0", "> SYSTEM BOOT SUCCESSFUL\n" + "-"*25 + "\n")
+
+        # --- VIDEO VIEWPORT ---
+        self.video_frame = ctk.CTkFrame(self, fg_color="#000000", corner_radius=15)
+        self.video_frame.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
+        
+        self.video_label = ctk.CTkLabel(self.video_frame, text="") 
+        self.video_label.pack(expand=True, fill="both", padx=5, pady=5)
+
+        self.btn_quit = ctk.CTkButton(self.sidebar, text="TERMINATE SESSION", fg_color="#991b1b", 
+                                      hover_color="#7f1d1d", command=self.on_closing)
+        self.btn_quit.pack(side="bottom", pady=30, padx=30, fill="x")
+
+    def log_incident(self, student_id, direction, frame):
+        save_dir = r"D:\SEMS\snapshots"
+        if not os.path.exists(save_dir): 
+            os.makedirs(save_dir)
+        
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = f"snapshots/alert_{ts}.jpg"
+        path = os.path.join(save_dir, f"{student_id}_{ts}.jpg")
         cv2.imwrite(path, frame)
         
         cursor = self.db_conn.cursor()
-        cursor.execute("INSERT INTO incidents (timestamp, violation_type, snapshot_path) VALUES (?, ?, ?)",
-                       (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), direction, path))
+        # Ensure column 'detail' matches init_db
+        cursor.execute("INSERT INTO incidents (timestamp, detail, path) VALUES (?, ?, ?)",
+                       (datetime.now().strftime("%H:%M:%S"), f"{student_id}: {direction}", path))
         self.db_conn.commit()
         
-        self.log_box.insert("end", f"[{ts[-6:]}] Alert: {direction}\n")
+        self.log_box.insert("end", f"[{datetime.now().strftime('%H:%M:%S')}] ALERT: {student_id}\n")
         self.log_box.see("end")
 
     def update_frame(self):
         ret, frame = self.cap.read()
         if ret:
-            # --- VISION LOGIC ---
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = self.face_cascade.detectMultiScale(gray, 1.05, 5, minSize=(30, 30))
             
-            # FIX: Adjusted ScaleFactor and minNeighbors to improve detection in low light and reduce stuttering
-            faces = self.face_cascade.detectMultiScale(gray, 1.05, 3, minSize=(50, 50))
-            profiles = self.profile_cascade.detectMultiScale(gray, 1.1, 15)
-            
-            is_looking_away = False
-            current_direction = "FORWARD"
+            self.count_label.configure(text=f"ACTIVE USERS: {len(faces)}")
 
-            if len(faces) > 0:
-                (x, y, cw, ch) = faces[0]
+            for i, (x, y, cw, ch) in enumerate(faces):
+                student_id = f"USER_{i+1:02d}"
                 center_x = x + cw // 2
-                if self.initial_x is None: self.initial_x = center_x
                 
-                move_x = center_x - self.initial_x
-                
-                # Balanced logic for smooth Left/Right detection
-                if move_x > (cw * self.RIGHT_SENSITIVITY):
-                    current_direction, is_looking_away = "RIGHT", True
-                elif move_x < (cw * self.LEFT_SENSITIVITY * -1):
-                    current_direction, is_looking_away = "LEFT", True
-                
-                cv2.rectangle(frame, (x, y), (x + cw, y + ch), (46, 204, 113), 2)
+                # --- CLEAR MOTION LOGIC ---
+                if student_id not in self.person_data:
+                    self.person_data[student_id] = {"smooth_x": center_x, "initial_x": center_x, "start_time": None, "alert_active": False}
 
-            if len(profiles) > 0:
-                is_looking_away, current_direction = True, "SIDE LOOK"
+                # Apply smoothing to center_x to prevent box jitter
+                curr_smooth = self.person_data[student_id]["smooth_x"]
+                new_smooth = (self.SMOOTHING_FACTOR * center_x) + ((1 - self.SMOOTHING_FACTOR) * curr_smooth)
+                self.person_data[student_id]["smooth_x"] = new_smooth
 
-            # --- ALERT LOGIC ---
-            if is_looking_away:
-                if self.turn_start_time is None: self.turn_start_time = time.time()
-                elapsed = time.time() - self.turn_start_time
-                self.status_label.configure(text=f"SUSPICIOUS: {elapsed:.1f}s", text_color="#e67e22")
+                move_ratio = (new_smooth - self.person_data[student_id]["initial_x"]) / cw 
                 
-                if elapsed > self.TURN_DURATION and not self.alert_active:
-                    self.alert_active = True
-                    self.log_incident(current_direction, frame)
-            else:
-                self.turn_start_time = None
-                self.alert_active = False
-                self.status_label.configure(text="STATUS: OK", text_color="#2ecc71")
+                is_looking_away = False
+                status_color = (46, 204, 113) # Default Green (Active)
 
-            # Final conversion for display
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = PIL.Image.fromarray(frame)
-            imgtk = PIL.ImageTk.PhotoImage(image=img)
-            self.video_label.imgtk = imgtk
-            self.video_label.configure(image=imgtk)
+                # Threshold check for clear head turns
+                if abs(move_ratio) > self.DEAD_ZONE:
+                    direction = "RIGHT" if move_ratio > self.RIGHT_SENSITIVITY else "LEFT"
+                    if abs(move_ratio) > self.RIGHT_SENSITIVITY:
+                        is_looking_away = True
+                        status_color = (245, 158, 11) # Amber Warning
+
+                if is_looking_away:
+                    if self.person_data[student_id]["start_time"] is None:
+                        self.person_data[student_id]["start_time"] = time.time()
+                    elapsed = time.time() - self.person_data[student_id]["start_time"]
+                    
+                    if elapsed > self.TURN_DURATION:
+                        status_color = (220, 38, 38) # Red Violation
+                        if not self.person_data[student_id]["alert_active"]:
+                            self.person_data[student_id]["alert_active"] = True
+                            self.log_incident(student_id, direction, frame)
+                    cv2.putText(frame, f"SUSPICIOUS: {elapsed:.1f}s", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, status_color, 1)
+                else:
+                    self.person_data[student_id]["start_time"] = None
+                    self.person_data[student_id]["alert_active"] = False
+
+                # Draw clear bounding boxes
+                cv2.rectangle(frame, (x, y), (x + cw, y + ch), status_color, 1)
+                cv2.putText(frame, student_id, (x, y + ch + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            ctk_img = ctk.CTkImage(PIL.Image.fromarray(rgb_frame), size=(850, 640))
+            self.video_label.configure(image=ctk_img)
+            self.video_label.image = ctk_img
 
         self.after(10, self.update_frame)
 
     def on_closing(self):
         self.cap.release()
-        self.db_conn.close()
+        if hasattr(self, 'db_conn'):
+            self.db_conn.close()
         self.destroy()
 
 if __name__ == "__main__":
