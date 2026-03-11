@@ -15,8 +15,8 @@ class SEMSDashboard(ctk.CTk):
         self.configure(fg_color="#1a1a1b")
         
         # --- List to hold active camera dictionaries ---
-        # Changed this to a list of dicts to easily track the capture, label, and UI card
         self.active_cameras = []
+        self.fullscreen_cam_data = None # Tracks which camera is currently in full screen
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
         # --- SIDEBAR ---
@@ -41,6 +41,9 @@ class SEMSDashboard(ctk.CTk):
         # Initialize Content Frames
         self.dashboard_frame = ctk.CTkFrame(self.container, fg_color="transparent")
         self.setup_dashboard_ui()
+        
+        self.fullscreen_frame = ctk.CTkFrame(self.container, fg_color="transparent")
+        self.setup_fullscreen_ui() # Setup the new full screen layout
         
         self.reports_frame = ReportsFrame(self.container)
         self.replay_frame = ReplaySystemFrame(self.container)
@@ -69,8 +72,25 @@ class SEMSDashboard(ctk.CTk):
         # Force a strict 3-column layout
         self.grid_frame.grid_columnconfigure((0, 1, 2), weight=1, uniform="col")
 
+    def setup_fullscreen_ui(self):
+        # Header for full screen
+        header = ctk.CTkFrame(self.fullscreen_frame, height=60, fg_color="transparent")
+        header.pack(side="top", fill="x", padx=30, pady=15)
+        
+        self.fs_title = ctk.CTkLabel(header, text="Room Monitoring", font=("Segoe UI", 24, "bold"), text_color="white")
+        self.fs_title.pack(side="left")
+        
+        btn_back = ctk.CTkButton(header, text="✖ Stop Monitoring", fg_color="#ff4d4d", hover_color="#cc0000", command=self.exit_fullscreen)
+        btn_back.pack(side="right")
+        
+        # Large Video Container
+        self.fs_video_container = ctk.CTkFrame(self.fullscreen_frame, fg_color="#000000")
+        self.fs_video_container.pack(expand=True, fill="both", padx=30, pady=(0, 30))
+        
+        self.fs_video_label = ctk.CTkLabel(self.fs_video_container, text="")
+        self.fs_video_label.pack(expand=True, fill="both")
+
     def add_camera_card_live(self, room_name):
-        # Calculate row and column based on current number of active cameras
         index = len(self.active_cameras)
         row = index // 3
         col = index % 3
@@ -78,21 +98,17 @@ class SEMSDashboard(ctk.CTk):
         card = ctk.CTkFrame(self.grid_frame, fg_color="#252526", corner_radius=12)
         card.grid(row=row, column=col, padx=12, pady=12, sticky="nsew")
         
-        # Video View Area (Fixed size to prevent UI stretching)
         view = ctk.CTkFrame(card, fg_color="#000000", height=180, width=280)
         view.pack(expand=True, fill="both", padx=8, pady=8)
-        view.pack_propagate(False) # Prevents the frame from shrinking/expanding
+        view.pack_propagate(False) 
         
-        # Create a label to hold the video stream
         video_label = ctk.CTkLabel(view, text="")
         video_label.pack(expand=True, fill="both")
         
-        # Initialize the webcam (0 for first camera, 1 for second, etc.)
-        # Note: In a real scenario, you might want to specify the index or let the user choose
+        # Initialize the webcam 
         cap_index = len(self.active_cameras) 
         cap = cv2.VideoCapture(cap_index)
         
-        # Store all components in a dictionary
         cam_data = {
             "cap": cap,
             "label": video_label,
@@ -101,59 +117,91 @@ class SEMSDashboard(ctk.CTk):
         }
         self.active_cameras.append(cam_data)
         
-        # Info row at the bottom of the card
+        # Make the video label clickable for Full Screen
+        video_label.bind("<Button-1>", lambda event, c=cam_data: self.enter_fullscreen(c))
+        
         info_frame = ctk.CTkFrame(card, fg_color="transparent")
         info_frame.pack(fill="x", padx=12, pady=(0, 10))
 
         ctk.CTkLabel(info_frame, text=room_name, font=("Segoe UI", 14, "bold"), text_color="#eeeeee").pack(side="left")
         
-        # --- NEW: The 'X' Button to remove the camera ---
         btn_remove = ctk.CTkButton(info_frame, text="✖", width=25, height=25, 
                                    fg_color="#ff4d4d", hover_color="#cc0000", 
                                    corner_radius=12,
                                    command=lambda c=cam_data: self.remove_camera(c))
         btn_remove.pack(side="right")
 
+    def enter_fullscreen(self, cam_data):
+        self.fullscreen_cam_data = cam_data
+        self.fs_title.configure(text=f"{cam_data['room_name']} - Full Screen Monitoring")
+        
+        self.dashboard_frame.pack_forget()
+        self.fullscreen_frame.pack(expand=True, fill="both")
+
+    def exit_fullscreen(self):
+        self.fullscreen_cam_data = None
+        self.fullscreen_frame.pack_forget()
+        self.dashboard_frame.pack(expand=True, fill="both")
+
     def remove_camera(self, cam_data):
-        # 1. Stop the video capture
         if cam_data["cap"].isOpened():
             cam_data["cap"].release()
-        
-        # 2. Destroy the UI card widget
         cam_data["card"].destroy()
-        
-        # 3. Remove from our active list
         self.active_cameras.remove(cam_data)
-        
-        # 4. Re-draw the grid so there are no empty gaps
         self.rearrange_grid()
+        
+        # If the removed camera was in full screen, exit full screen
+        if self.fullscreen_cam_data == cam_data:
+            self.exit_fullscreen()
 
     def rearrange_grid(self):
-        # Loop through remaining active cameras and update their grid positions
         for index, cam in enumerate(self.active_cameras):
             row = index // 3
             col = index % 3
             cam["card"].grid(row=row, column=col, padx=12, pady=12, sticky="nsew")
 
     def update_cameras(self):
-        # Continuously fetch frames for all active cameras
+        # Loop through all cameras. We MUST read from all of them so buffers don't overflow.
         for cam in self.active_cameras:
             cap = cam["cap"]
-            label = cam["label"]
             
             if cap.isOpened():
                 ret, frame = cap.read()
                 if ret:
-                    # Resize to fit the UI card nicely
-                    frame = cv2.resize(frame, (280, 180))
-                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    img = Image.fromarray(rgb_frame)
-                    ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(280, 180))
-                    
-                    label.configure(image=ctk_img)
-                    label.image = ctk_img
+                    if self.fullscreen_cam_data and self.fullscreen_cam_data == cam:
+                        # Full-Screen Resizing
+                        fs_width = self.fs_video_label.winfo_width()
+                        fs_height = self.fs_video_label.winfo_height()
+                        
+                        if fs_width < 100 or fs_height < 100:
+                            fs_width, fs_height = 800, 500
 
-        # Refresh every ~15ms
+                        fs_frame = cv2.resize(frame, (fs_width, fs_height))
+                        rgb_fs = cv2.cvtColor(fs_frame, cv2.COLOR_BGR2RGB)
+                        img_fs = Image.fromarray(rgb_fs)
+                        ctk_img_fs = ctk.CTkImage(light_image=img_fs, dark_image=img_fs, size=(fs_width, fs_height))
+                        
+                        self.fs_video_label.configure(image=ctk_img_fs)
+                        self.fs_video_label.image = ctk_img_fs
+                    
+                    elif not self.fullscreen_cam_data:
+                        # --- FIX: Dynamic Grid Resizing ---
+                        grid_width = cam["label"].winfo_width()
+                        grid_height = cam["label"].winfo_height()
+                        
+                        # Fallback in case UI is still booting up
+                        if grid_width < 100 or grid_height < 100:
+                            grid_width, grid_height = 280, 180
+
+                        # Stretch the video to fill the current black container
+                        small_frame = cv2.resize(frame, (grid_width, grid_height))
+                        rgb_small = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+                        img_small = Image.fromarray(rgb_small)
+                        ctk_img_small = ctk.CTkImage(light_image=img_small, dark_image=img_small, size=(grid_width, grid_height))
+                        
+                        cam["label"].configure(image=ctk_img_small)
+                        cam["label"].image = ctk_img_small
+
         self.after(15, self.update_cameras)
 
     def open_add_local_popup(self): 
@@ -170,18 +218,26 @@ class SEMSDashboard(ctk.CTk):
     def show_dashboard(self):
         self.reports_frame.pack_forget()
         self.replay_frame.pack_forget()
-        self.dashboard_frame.pack(expand=True, fill="both")
+        
+        # Check if we are in full screen or not
+        if self.fullscreen_cam_data:
+            self.fullscreen_frame.pack(expand=True, fill="both")
+        else:
+            self.dashboard_frame.pack(expand=True, fill="both")
+            
         self.update_btn_style(self.btn_dash)
 
     def show_reports(self):
         self.dashboard_frame.pack_forget()
         self.replay_frame.pack_forget()
+        self.fullscreen_frame.pack_forget() # Hide full screen if active
         self.reports_frame.pack(expand=True, fill="both")
         self.update_btn_style(self.btn_reports)
 
     def show_replay(self):
         self.dashboard_frame.pack_forget()
         self.reports_frame.pack_forget()
+        self.fullscreen_frame.pack_forget() # Hide full screen if active
         self.replay_frame.pack(expand=True, fill="both")
         self.update_btn_style(self.btn_replay)
 
@@ -191,7 +247,6 @@ class SEMSDashboard(ctk.CTk):
         active_btn.configure(fg_color="#2d2d2e")
 
     def on_closing(self):
-        # Release all webcams when the app is closed
         for cam in self.active_cameras:
             if cam["cap"].isOpened():
                 cam["cap"].release()
