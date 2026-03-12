@@ -2,9 +2,10 @@ import customtkinter as ctk
 from PIL import Image, ImageDraw, ImageOps
 from main_dashboard1 import SEMSDashboard 
 
-class SEMSCompactSplash(ctk.CTk):
-    def __init__(self):
-        super().__init__()
+# Notice we changed ctk.CTk to ctk.CTkToplevel
+class SEMSCompactSplash(ctk.CTkToplevel):
+    def __init__(self, master):
+        super().__init__(master)
 
         # --- Window Setup ---
         width, height = 450, 250
@@ -24,7 +25,7 @@ class SEMSCompactSplash(ctk.CTk):
         self.after_id = None
 
         # --- Image Processing ---
-        img_path = r"C:\Users\My PC\Logos\logo.png"
+        img_path = r"C:\Users\420\OneDrive\Documents\SEMS Capstone\SEMS\images\logo.png"
         radius = 35 
 
         try:
@@ -63,11 +64,22 @@ class SEMSCompactSplash(ctk.CTk):
     def open_dashboard(self):
         if self.after_id:
             self.after_cancel(self.after_id)
-        self.withdraw()
-        main_app = SEMSDashboard()
+            
+        # Destroy the splash screen popup
         self.destroy()
-        main_app.mainloop()
+        
+        # Un-hide the main dashboard!
+        self.master.deiconify()
 
 if __name__ == "__main__":
-    app = SEMSCompactSplash()
-    app.mainloop()
+    # 1. Create the Main Dashboard FIRST (This makes it the official root window)
+    main_app = SEMSDashboard()
+    
+    # 2. Hide the dashboard immediately so the user doesn't see it yet
+    main_app.withdraw()
+    
+    # 3. Create the Splash Screen and pass the dashboard as its master
+    splash = SEMSCompactSplash(main_app)
+    
+    # 4. Start the application loop
+    main_app.mainloop()
