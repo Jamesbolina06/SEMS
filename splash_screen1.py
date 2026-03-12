@@ -56,8 +56,8 @@ class SEMSCompactSplash(ctk.CTkToplevel):
     def loading_step(self, val):
         if val <= 1.0:
             self.progress.set(val)
-            # 30ms * 100 iterations = 3 seconds
-            self.after_id = self.after(30, lambda: self.loading_step(val + 0.01))
+            # 20ms * 100 iterations = 2 seconds
+            self.after_id = self.after(20, lambda: self.loading_step(val + 0.01))
         else:
             self.after(100, self.open_dashboard)
 

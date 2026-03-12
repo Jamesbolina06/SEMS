@@ -23,7 +23,7 @@ class SEMSDashboard(ctk.CTk):
         self.sidebar = ctk.CTkFrame(self, width=260, corner_radius=0, fg_color="#111112")
         self.sidebar.pack(side="left", fill="y")
         
-        ctk.CTkLabel(self.sidebar, text="SEMS", font=("Segoe UI", 35, "bold"), text_color="white").pack(pady=(50, 5))
+        ctk.CTkLabel(self.sidebar, text="SEMS", font=("Arial", 35, "bold"), text_color="white").pack(pady=(50, 5))
         ctk.CTkLabel(self.sidebar, text="● System Active", font=("Segoe UI", 11, "bold"), text_color="#00FF00").pack(pady=(0, 40))
         
         self.btn_dash = self.create_nav_btn("📊 Dashboard", self.show_dashboard)
@@ -80,8 +80,13 @@ class SEMSDashboard(ctk.CTk):
         self.fs_title = ctk.CTkLabel(header, text="Room Monitoring", font=("Segoe UI", 24, "bold"), text_color="white")
         self.fs_title.pack(side="left")
         
+        # Red Stop Button
         btn_back = ctk.CTkButton(header, text="✖ Stop Monitoring", fg_color="#ff4d4d", hover_color="#cc0000", command=self.exit_fullscreen)
         btn_back.pack(side="right")
+        
+        # --- NEW: Green Save Monitoring Button ---
+        btn_save = ctk.CTkButton(header, text="💾 Saved Monitoring", fg_color="#00cc66", hover_color="#00994d", command=self.save_monitoring_action)
+        btn_save.pack(side="right", padx=10)
         
         # Large Video Container
         self.fs_video_container = ctk.CTkFrame(self.fullscreen_frame, fg_color="#000000")
@@ -89,6 +94,13 @@ class SEMSDashboard(ctk.CTk):
         
         self.fs_video_label = ctk.CTkLabel(self.fs_video_container, text="")
         self.fs_video_label.pack(expand=True, fill="both")
+
+    def save_monitoring_action(self):
+        # This is where we will add the logic to start recording or saving to the replay system
+        if self.fullscreen_cam_data:
+            room = self.fullscreen_cam_data['room_name']
+            print(f"DEBUG: Saving monitoring video for {room}...")
+            # We will use OpenCV VideoWriter here later!
 
     def add_camera_card_live(self, room_name):
         index = len(self.active_cameras)
