@@ -31,7 +31,7 @@ class SEMSDashboard(ctk.CTk):
         self.btn_replay = self.create_nav_btn("🔄 Replay System", self.show_replay)
 
         self.session_info = ctk.CTkLabel(self.sidebar, 
-            text="Currently Monitored Session\nSession ID: 20251119-001\nUser: Admin\nMidterm Exam",
+            text="Currently Monitored Session\n\nSmart Examination and\nRoom Decorum Monitoring System",
             font=("Segoe UI", 11), text_color="#777777", justify="left")
         self.session_info.pack(side="bottom", pady=30, padx=20, anchor="w")
 
